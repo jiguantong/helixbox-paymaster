@@ -1,5 +1,5 @@
 export default {
-  rpcUrl: process.env.RPC_URL || 'https://rpc.berachain.com',
+  rpcUrl: process.env.RPC_URL || 'https://rpc.ankr.com/eth_sepolia',
   // https://basescan.org/address/0x0000000000000039cd5e8ae05257ce51c473ddd1#code
   paymasterAddress: process.env.PAYMASTER_ADDRESS || '0x0000000000000039cd5e8ae05257ce51c473ddd1',
   paymasterPrivateKey: process.env.PAYMASTER_PRIVATE_KEY,
