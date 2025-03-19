@@ -64,15 +64,6 @@ export class PaymasterService {
         ethers.getBytes(dataToSign)
       );
 
-      // Build paymaster data in the format expected by the client
-      // pimlico demo: 0x00000000000000000000000000cd91f19f0f19ce862d7bec7b7d9b95457145afc6f639c28fd0360f488937bfa41e6eedcd3a46054fd95fcd0e3ef6b0bc0a615c4d975eef55c8a3517257904d5b1c
-      const paymasterData = ethers.concat([
-        formattedTokenAddress,
-        ethers.zeroPadValue(ethers.toBeHex(validUntil), 32),
-        ethers.zeroPadValue(ethers.toBeHex(validAfter), 32),
-        ethers.getBytes(signature)
-      ]);
-
       // Calculate the gas needed for verification and post-processing
       const calculateGasLimits = (userOp: any) => {
         // Base verification gas (fixed cost)
@@ -88,7 +79,10 @@ export class PaymasterService {
         }
 
         // Post-processing gas (usually smaller than verification gas)
-        const postOpGas = 15000 + (callDataLength * 8); // Base cost + 8 gas per byte
+        let postOpGas = 15000 + (callDataLength * 8); // Base cost + 8 gas per byte
+
+        // Ensure postOpGas is at least 20000 as required
+        postOpGas = Math.max(postOpGas, 20000);
 
         return {
           verificationGas: Math.min(verificationGas, 150000), // Set cap
@@ -97,11 +91,34 @@ export class PaymasterService {
       };
 
       const gasLimits = calculateGasLimits(userOp);
+
+      // Build paymasterData according to Pimlico specification
+      // Format: mode and allowAllBundlers(1 byte) + validUntil(6 bytes) + validAfter(6 bytes) + signature(65 bytes)
+
+
+      // Mode and allowAllBundlers (using 0x01 for mode 0 and allowAllBundlers true)
+      const modeAndAllowAllBundlers = '0x01';
+
+      // Convert timestamps to 6 bytes
+      const validUntilHex = ethers.toBeHex(validUntil).slice(2).padStart(12, '0');
+      const validAfterHex = ethers.toBeHex(validAfter).slice(2).padStart(12, '0');
+
+      // Build paymasterData
+      const paymasterData = ethers.concat([
+        modeAndAllowAllBundlers,                      // mode and allowAllBundlers (1 byte)
+        `0x${validUntilHex}`,                         // validUntil (6 bytes)
+        `0x${validAfterHex}`,                         // validAfter (6 bytes)
+        signature                                      // signature (65 bytes)
+      ]);
+
+      console.log("Built paymasterData:", ethers.hexlify(paymasterData));
+      console.log("paymasterData length:", (ethers.hexlify(paymasterData).length - 2) / 2, "bytes");
+
       const stubData = {
         "id": id,
         "result": {
           "paymaster": this.paymasterContract.target,
-          "paymasterData": paymasterData,
+          "paymasterData": ethers.hexlify(paymasterData),
           "paymasterPostOpGasLimit": `0x${gasLimits.postOpGas.toString(16)}`,
           "paymasterVerificationGasLimit": `0x${gasLimits.verificationGas.toString(16)}`
         },
@@ -170,11 +187,15 @@ export class PaymasterService {
    * Get final paymaster data with signature
    */
   async getPaymasterData(
-    userOp: UserOperation,
-    entryPoint: string,
-    context?: { token?: string }
-  ): Promise<string> {
+    id: number,
+    params: any[]
+  ): Promise<any> {
     try {
+      // Extract userOp from params
+      const userOp = params[0];
+      const entryPoint = params[1];
+      const context = params[3] || {};
+
       const tokenAddress = context?.token || ethers.ZeroAddress;
 
       // Set validity window
@@ -197,15 +218,29 @@ export class PaymasterService {
         ethers.getBytes(dataToSign)
       );
 
-      // Format final paymaster data
-      const paymasterAndData = ethers.concat([
-        this.paymasterContract.target as string,
-        tokenAddress,
-        ethers.zeroPadValue(ethers.toBeHex(validUntil), 32),
-        ethers.zeroPadValue(ethers.toBeHex(validAfter), 32),
-        ethers.getBytes(signature)
+      // Mode and allowAllBundlers (using 0x01 for mode 0 and allowAllBundlers true)
+      const modeAndAllowAllBundlers = '0x01';
+
+      // Convert timestamps to 6 bytes
+      const validUntilHex = ethers.toBeHex(validUntil).slice(2).padStart(12, '0');
+      const validAfterHex = ethers.toBeHex(validAfter).slice(2).padStart(12, '0');
+
+      // Build paymasterData
+      const paymasterData = ethers.concat([
+        modeAndAllowAllBundlers,                      // mode and allowAllBundlers (1 byte)
+        `0x${validUntilHex}`,                         // validUntil (6 bytes)
+        `0x${validAfterHex}`,                         // validAfter (6 bytes)
+        signature                                      // signature (65 bytes)
       ]);
 
+      const paymasterAndData = {
+        "id": id,
+        "result": {
+          "paymaster": this.paymasterContract.target,
+          "paymasterData": ethers.hexlify(paymasterData),
+        },
+        "jsonrpc": "2.0"
+      }
       return paymasterAndData;
     } catch (error: unknown) {
       console.error("Error in getPaymasterData:", error);
@@ -261,15 +296,15 @@ export class PaymasterService {
         "id": 2,
         "result": {
           "fast": {
-            "maxFeePerGas": `0x${(baseFee + fastMaxPriorityFee).toString(16)}`,
+            "maxFeePerGas": `0x${((baseFee + fastMaxPriorityFee) * BigInt(3) / BigInt(2)).toString(16)}`,
             "maxPriorityFeePerGas": `0x${fastMaxPriorityFee.toString(16)}`
           },
           "slow": {
-            "maxFeePerGas": `0x${(baseFee + slowMaxPriorityFee).toString(16)}`,
+            "maxFeePerGas": `0x${((baseFee + slowMaxPriorityFee) * BigInt(3) / BigInt(2)).toString(16)}`,
             "maxPriorityFeePerGas": `0x${slowMaxPriorityFee.toString(16)}`
           },
           "standard": {
-            "maxFeePerGas": `0x${(baseFee + standardMaxPriorityFee).toString(16)}`,
+            "maxFeePerGas": `0x${((baseFee + standardMaxPriorityFee) * BigInt(3) / BigInt(2)).toString(16)}`,
             "maxPriorityFeePerGas": `0x${standardMaxPriorityFee.toString(16)}`
           }
         },

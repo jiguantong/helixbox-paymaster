@@ -23,7 +23,7 @@ const paymaster: FastifyPluginAsync = async (fastify, opts): Promise<void> => {
       case 'pm_validateSponsorshipPolicies':
         return await paymasterService.validateSponsorshipPolicies(params[0], params[1], params[2])
       case 'pm_getPaymasterData':
-        return await paymasterService.getPaymasterData(params[0], params[1], params[2])
+        return await paymasterService.getPaymasterData(id, params)
       default:
         return reply.code(400).send({
           jsonrpc: '2.0',
@@ -66,36 +66,6 @@ const paymaster: FastifyPluginAsync = async (fastify, opts): Promise<void> => {
     }
   })
 
-  // pm_getPaymasterData endpoint
-  fastify.post('/getPaymasterData', async function (request, reply) {
-    const { userOp, entryPoint, context } = request.body as {
-      userOp: UserOperation,
-      entryPoint: string,
-      context?: {
-        token?: string
-      }
-    }
-
-    try {
-      const paymasterData = await paymasterService.getPaymasterData(userOp, entryPoint, context)
-      return {
-        jsonrpc: '2.0',
-        result: paymasterData,
-        id: 1
-      }
-    } catch (error: unknown) {
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      fastify.log.error(`Error in getPaymasterData: ${errorMessage}`)
-      return reply.code(400).send({
-        jsonrpc: '2.0',
-        error: {
-          code: -32603,
-          message: errorMessage
-        },
-        id: 1
-      })
-    }
-  })
 }
 
 export default paymaster
