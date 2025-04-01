@@ -13,6 +13,10 @@ export interface UserOperation {
   maxPriorityFeePerGas: string;
   paymasterAndData: string;
   signature: string;
+  paymaster?: string;
+  paymasterData?: string;
+  paymasterPostOpGasLimit?: string;
+  paymasterVerificationGasLimit?: string;
 }
 
 /**

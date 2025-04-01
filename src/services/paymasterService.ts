@@ -48,7 +48,7 @@ export class PaymasterService {
       console.log("entryPoint", entryPoint);
 
       // Create hash to sign
-      const userOpHash = await this.getUserOpHash(userOp, entryPoint);
+      const userOpHash = await this.getUserOpHashStub(userOp, entryPoint);
       console.log("userOpHash", userOpHash);
       // Prepare data for signature
       const dataToSign = ethers.keccak256(
@@ -59,10 +59,10 @@ export class PaymasterService {
       );
       console.log("dataToSign", dataToSign);
 
-      // Sign the data
       const signature = await this.signer.signMessage(
         ethers.getBytes(dataToSign)
       );
+      console.log("signature", signature);
 
       // Calculate the gas needed for verification and post-processing
       const calculateGasLimits = (userOp: any) => {
@@ -81,8 +81,8 @@ export class PaymasterService {
         // Post-processing gas (usually smaller than verification gas)
         let postOpGas = 15000 + (callDataLength * 8); // Base cost + 8 gas per byte
 
-        // Ensure postOpGas is at least 20000 as required
-        postOpGas = Math.max(postOpGas, 20000);
+        // Ensure postOpGas is at least 40000 as required
+        postOpGas = Math.max(postOpGas, 40000);
 
         return {
           verificationGas: Math.min(verificationGas, 150000), // Set cap
@@ -193,33 +193,48 @@ export class PaymasterService {
     try {
       // Extract userOp from params
       const userOp = params[0];
-      const entryPoint = params[1];
-      const context = params[3] || {};
+      // const entryPoint = params[1];
+      // const context = params[3] || {};
 
-      const tokenAddress = context?.token || ethers.ZeroAddress;
+      // const tokenAddress = context?.token || ethers.ZeroAddress;
 
       // Set validity window
       const validUntil = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
       const validAfter = Math.floor(Date.now() / 1000) - 60; // Valid from 1 minute ago
 
-      // Create hash to sign
-      const userOpHash = await this.getUserOpHash(userOp, entryPoint);
+      console.log("### 1111 userOp: \n", JSON.stringify(userOp, null, 2));
 
-      // Prepare data for signature
-      const dataToSign = ethers.keccak256(
+      console.log("###1111 sender:", userOp.sender);
+      console.log("###1111 verificationGasLimit:", userOp.verificationGasLimit);
+      console.log("###1111 postVerificationGas:", userOp.postVerificationGas);
+      console.log("###1111 validUntil:", validUntil);
+      console.log("###1111 validAfter:", validAfter);
+
+      const paymasterAndDataWithOutSignatureHash = ethers.keccak256(
         ethers.AbiCoder.defaultAbiCoder().encode(
-          ['bytes32', 'address', 'address', 'uint48', 'uint48'],
-          [userOpHash, this.paymasterContract.target, tokenAddress, validUntil, validAfter]
+          ['address', 'uint256', 'uint256', 'uint8', 'uint48', 'uint48'],
+          [
+            userOp.sender,
+            BigInt(userOp.verificationGasLimit),
+            BigInt(40000),  // paymaster postop gas (16 bytes)
+            1, // mode in bits 1-7, allowAllBundlers in bit 0
+            BigInt(validUntil),              // 6 bytes timestamp
+            BigInt(validAfter)               // 6 bytes timestamp
+          ]
         )
       );
+      console.log('### paymasterAndDataWithOutSignatureHash: \n', paymasterAndDataWithOutSignatureHash);
+
+      // Create hash to sign
+      const userOpHash = await this.getUserOpHash(userOp, paymasterAndDataWithOutSignatureHash, 11155111);
+      console.log("userOpHash", userOpHash);
+      // Prepare data for signature
+      const dataToSign = userOpHash;
 
       // Sign the data
       const signature = await this.signer.signMessage(
         ethers.getBytes(dataToSign)
       );
-
-      // Mode and allowAllBundlers (using 0x01 for mode 0 and allowAllBundlers true)
-      const modeAndAllowAllBundlers = '0x01';
 
       // Convert timestamps to 6 bytes
       const validUntilHex = ethers.toBeHex(validUntil).slice(2).padStart(12, '0');
@@ -227,7 +242,7 @@ export class PaymasterService {
 
       // Build paymasterData
       const paymasterData = ethers.concat([
-        modeAndAllowAllBundlers,                      // mode and allowAllBundlers (1 byte)
+        `0x01`,                      // mode and allowAllBundlers (1 byte)
         `0x${validUntilHex}`,                         // validUntil (6 bytes)
         `0x${validAfterHex}`,                         // validAfter (6 bytes)
         signature                                      // signature (65 bytes)
@@ -316,7 +331,7 @@ export class PaymasterService {
     }
   }
 
-  private async getUserOpHash(userOp: UserOperation, entryPoint: string): Promise<string> {
+  private async getUserOpHashStub(userOp: UserOperation, entryPoint: string): Promise<string> {
     // Implement the userOp hash calculation according to ERC-4337 spec
     const packedUserOp = ethers.AbiCoder.defaultAbiCoder().encode(
       [
@@ -356,5 +371,85 @@ export class PaymasterService {
     );
 
     return ethers.keccak256(encodedData);
+  }
+
+  private async getUserOpHash(
+    userOp: UserOperation,
+    paymasterAndDataWithOutSignatureHash: string,
+    chainId: number
+  ): Promise<string> {
+    console.log("userOp", userOp);
+
+    console.log('### userOp: \n', JSON.stringify(userOp, null, 2));
+    console.log('verificationGasLimit:', userOp.verificationGasLimit);
+    console.log('callGasLimit:', userOp.callGasLimit);
+    console.log('maxPriorityFeePerGas:', userOp.maxPriorityFeePerGas);
+    console.log('maxFeePerGas:', userOp.maxFeePerGas);
+    // 将 verificationGasLimit 和 callGasLimit 转换为 BigInt
+    const verificationGasLimit = BigInt(userOp.verificationGasLimit || '0');
+    const callGasLimit = BigInt(userOp.callGasLimit || '0');
+
+    // 创建掩码来模拟 uint128
+    const UINT128_MASK = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF');
+
+    // 执行位运算，模拟 uint128 类型
+    const accountGasLimits = (verificationGasLimit & UINT128_MASK) | ((callGasLimit & UINT128_MASK) << BigInt(128));
+
+    // 转换 maxPriorityFeePerGas 和 maxFeePerGas 为 BigInt
+    const maxPriorityFeePerGasBigInt = BigInt(userOp.maxPriorityFeePerGas || '0');
+    const maxFeePerGasBigInt = BigInt(userOp.maxFeePerGas || '0');
+
+    // 模拟 uint128 类型并执行位运算
+    const gasFees = (maxPriorityFeePerGasBigInt & UINT128_MASK) | ((maxFeePerGasBigInt & UINT128_MASK) << BigInt(128));
+
+    // 将 accountGasLimits 转换为 bytes32
+    const accountGasLimitsBytes32 = ethers.hexlify(accountGasLimits.toString()).padEnd(66, '0');
+
+    // 将 gasFees 转换为 bytes32
+    const gasFeesBytes32 = ethers.hexlify(gasFees.toString()).padEnd(66, '0');
+
+    console.log("#### userOp encode", JSON.stringify([
+      userOp.sender,
+      userOp.nonce,
+      userOp.initCode || '0x',  // 直接使用 initCode，不需要 keccak256
+      userOp.callData || '0x',  // 直接使用 callData，不需要 keccak256
+      accountGasLimitsBytes32,  // 使用正确的 bytes32 格式
+      userOp.preVerificationGas,
+      gasFeesBytes32,  // 使用正确的 bytes32 格式
+      userOp.paymasterAndData || '0x',  // 使用完整的 paymasterAndData
+      userOp.signature || '0x'  // 包含签名
+    ]))
+
+    const userOpHash = ethers.keccak256(
+      ethers.AbiCoder.defaultAbiCoder().encode(
+        [
+          "address",
+          "uint256",
+          "uint256",
+          "uint256",
+          "uint256",
+          "bytes32",
+          "bytes32",
+          "bytes32"
+        ],
+        [
+          userOp.sender,
+          userOp.nonce,
+          accountGasLimits,
+          userOp.preVerificationGas,
+          gasFees,
+          ethers.keccak256(userOp.initCode || '0x'),
+          ethers.keccak256(userOp.callData || '0x'),
+          paymasterAndDataWithOutSignatureHash
+        ]
+      )
+    );
+
+    return ethers.keccak256(
+      ethers.AbiCoder.defaultAbiCoder().encode(
+        ["bytes32", "uint256"],
+        [userOpHash, chainId]
+      )
+    );
   }
 } 
