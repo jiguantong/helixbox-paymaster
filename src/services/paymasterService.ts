@@ -1,5 +1,5 @@
 import { UserOperation } from '../types/userOperation.js';
-import { ethers } from 'ethers';
+import { ethers, solidityPacked } from 'ethers';
 
 export class PaymasterService {
   private provider: ethers.JsonRpcProvider;
@@ -210,19 +210,17 @@ export class PaymasterService {
       console.log("###1111 validUntil:", validUntil);
       console.log("###1111 validAfter:", validAfter);
 
-      const paymasterAndDataWithOutSignature =
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ['address', 'uint256', 'uint256', 'uint8', 'uint48', 'uint48'],
-          [
-            userOp.sender,
-            BigInt(userOp.verificationGasLimit),
-            BigInt(40000),  // paymaster postop gas (16 bytes)
-            1, // mode in bits 1-7, allowAllBundlers in bit 0
-            BigInt(validUntil),              // 6 bytes timestamp
-            BigInt(validAfter)               // 6 bytes timestamp
-          ]
-        )
-        ;
+      const paymasterAndDataWithOutSignature = solidityPacked(
+        ['address', 'uint128', 'uint128', 'uint8', 'uint48', 'uint48'],
+        [
+          "0xDE31CDdee69441D6F1D35E3486DA444bbA43573e",
+          BigInt(userOp.paymasterVerificationGasLimit),
+          BigInt(userOp.paymasterPostOpGasLimit),
+          1, // mode in bits 1-7, allowAllBundlers in bit 0
+          BigInt(validUntil),              // 6 bytes timestamp
+          BigInt(validAfter)               // 6 bytes timestamp
+        ]
+      );
       console.log('### paymasterAndDataWithOutSignature: \n', paymasterAndDataWithOutSignature);
 
       // Create hash to sign
@@ -247,6 +245,9 @@ export class PaymasterService {
         `0x${validAfterHex}`,                         // validAfter (6 bytes)
         signature                                      // signature (65 bytes)
       ]);
+      console.log("### paymaster: \n", this.paymasterContract.target);
+      console.log("### paymasterData: \n", paymasterData);
+      console.log("### signature: \n", signature);
 
       const paymasterAndData = {
         "id": id,
