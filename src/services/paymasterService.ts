@@ -373,6 +373,15 @@ export class PaymasterService {
     return ethers.keccak256(encodedData);
   }
 
+  packUint(high128: bigint | string | number, low128: bigint | string | number): string {
+    const highBigInt = BigInt(high128);
+    const lowBigInt = BigInt(low128);
+    
+    const result = (highBigInt << 128n) | lowBigInt;
+    
+    return ethers.zeroPadValue(ethers.toBeHex(result), 32);
+  }
+
   private async getUserOpHash(
     userOp: UserOperation,
     paymasterAndDataWithOutSignatureHash: string,
@@ -389,35 +398,28 @@ export class PaymasterService {
     const verificationGasLimit = BigInt(userOp.verificationGasLimit || '0');
     const callGasLimit = BigInt(userOp.callGasLimit || '0');
 
-    // 创建掩码来模拟 uint128
-    const UINT128_MASK = BigInt('0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF');
 
     // 执行位运算，模拟 uint128 类型
-    const accountGasLimits = (verificationGasLimit & UINT128_MASK) | ((callGasLimit & UINT128_MASK) << BigInt(128));
+    const accountGasLimits = this.packUint(verificationGasLimit, callGasLimit);
 
     // 转换 maxPriorityFeePerGas 和 maxFeePerGas 为 BigInt
     const maxPriorityFeePerGasBigInt = BigInt(userOp.maxPriorityFeePerGas || '0');
     const maxFeePerGasBigInt = BigInt(userOp.maxFeePerGas || '0');
 
     // 模拟 uint128 类型并执行位运算
-    const gasFees = (maxPriorityFeePerGasBigInt & UINT128_MASK) | ((maxFeePerGasBigInt & UINT128_MASK) << BigInt(128));
+    const gasFees = this.packUint(maxPriorityFeePerGasBigInt, maxFeePerGasBigInt);
 
-    // 将 accountGasLimits 转换为 bytes32
-    const accountGasLimitsBytes32 = ethers.hexlify(accountGasLimits.toString()).padEnd(66, '0');
-
-    // 将 gasFees 转换为 bytes32
-    const gasFeesBytes32 = ethers.hexlify(gasFees.toString()).padEnd(66, '0');
 
     console.log("#### userOp encode", JSON.stringify([
       userOp.sender,
       userOp.nonce,
-      userOp.initCode || '0x',  // 直接使用 initCode，不需要 keccak256
-      userOp.callData || '0x',  // 直接使用 callData，不需要 keccak256
-      accountGasLimitsBytes32,  // 使用正确的 bytes32 格式
+      userOp.initCode || '0x',
+      userOp.callData || '0x',
+      accountGasLimits,
       userOp.preVerificationGas,
-      gasFeesBytes32,  // 使用正确的 bytes32 格式
-      userOp.paymasterAndData || '0x',  // 使用完整的 paymasterAndData
-      userOp.signature || '0x'  // 包含签名
+      gasFees,
+      userOp.paymasterAndData || '0x',
+      userOp.signature || '0x'
     ]))
 
     const userOpHash = ethers.keccak256(
