@@ -210,7 +210,7 @@ export class PaymasterService {
       console.log("###1111 validUntil:", validUntil);
       console.log("###1111 validAfter:", validAfter);
 
-      const paymasterAndDataWithOutSignatureHash = ethers.keccak256(
+      const paymasterAndDataWithOutSignature =
         ethers.AbiCoder.defaultAbiCoder().encode(
           ['address', 'uint256', 'uint256', 'uint8', 'uint48', 'uint48'],
           [
@@ -222,11 +222,11 @@ export class PaymasterService {
             BigInt(validAfter)               // 6 bytes timestamp
           ]
         )
-      );
-      console.log('### paymasterAndDataWithOutSignatureHash: \n', paymasterAndDataWithOutSignatureHash);
+        ;
+      console.log('### paymasterAndDataWithOutSignature: \n', paymasterAndDataWithOutSignature);
 
       // Create hash to sign
-      const userOpHash = await this.getUserOpHash(userOp, paymasterAndDataWithOutSignatureHash, 11155111);
+      const userOpHash = await this.getUserOpHash(userOp, paymasterAndDataWithOutSignature, 11155111);
       console.log("userOpHash", userOpHash);
       // Prepare data for signature
       const dataToSign = userOpHash;
@@ -376,15 +376,15 @@ export class PaymasterService {
   packUint(high128: bigint | string | number, low128: bigint | string | number): string {
     const highBigInt = BigInt(high128);
     const lowBigInt = BigInt(low128);
-    
+
     const result = (highBigInt << 128n) | lowBigInt;
-    
+
     return ethers.zeroPadValue(ethers.toBeHex(result), 32);
   }
 
   private async getUserOpHash(
     userOp: UserOperation,
-    paymasterAndDataWithOutSignatureHash: string,
+    paymasterAndDataWithOutSignature: string,
     chainId: number
   ): Promise<string> {
     console.log("userOp", userOp);
@@ -422,6 +422,8 @@ export class PaymasterService {
       userOp.signature || '0x'
     ]))
 
+    console.log("#### paymasterAndDataWithOutSignature", paymasterAndDataWithOutSignature);
+
     const userOpHash = ethers.keccak256(
       ethers.AbiCoder.defaultAbiCoder().encode(
         [
@@ -442,7 +444,7 @@ export class PaymasterService {
           gasFees,
           ethers.keccak256(userOp.initCode || '0x'),
           ethers.keccak256(userOp.callData || '0x'),
-          paymasterAndDataWithOutSignatureHash
+          ethers.keccak256(paymasterAndDataWithOutSignature)
         ]
       )
     );
