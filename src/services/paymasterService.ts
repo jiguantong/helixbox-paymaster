@@ -3,6 +3,9 @@ import { ethers, solidityPacked } from 'ethers';
 import { PaymasterConfig } from '../config/index.js';
 
 export class PaymasterService {
+  private readonly VALIDITY_WINDOW_SECONDS = 3600; // 1 hour
+  private readonly VALIDITY_BEFORE_SECONDS = 60; // 1 minute
+  private readonly DEFAULT_MODE = 1; // mode in bits 1-7, allowAllBundlers in bit 0
 
   private chainRuntimes: {
     [key: string]: {
@@ -27,6 +30,50 @@ export class PaymasterService {
     }
   }
 
+  private getValidityTimeWindow(): { validUntil: number, validAfter: number } {
+    const now = Math.floor(Date.now() / 1000);
+    return {
+      validUntil: now + this.VALIDITY_WINDOW_SECONDS,
+      validAfter: now - this.VALIDITY_BEFORE_SECONDS
+    };
+  }
+
+  private createPaymasterDataWithoutSignature(
+    paymasterAddress: string,
+    verificationGasLimit: bigint | number | string,
+    postOpGasLimit: bigint | number | string,
+    validUntil: number,
+    validAfter: number
+  ): string {
+    return solidityPacked(
+      ['address', 'uint128', 'uint128', 'uint8', 'uint48', 'uint48'],
+      [
+        paymasterAddress,
+        BigInt(verificationGasLimit),
+        BigInt(postOpGasLimit),
+        this.DEFAULT_MODE,
+        BigInt(validUntil),
+        BigInt(validAfter)
+      ]
+    );
+  }
+
+  private createPaymasterData(
+    validUntil: number,
+    validAfter: number,
+    signature: string
+  ): string {
+    const validUntilHex = ethers.toBeHex(validUntil).slice(2).padStart(12, '0');
+    const validAfterHex = ethers.toBeHex(validAfter).slice(2).padStart(12, '0');
+
+    return ethers.hexlify(ethers.concat([
+      `0x0${this.DEFAULT_MODE}`,
+      `0x${validUntilHex}`,
+      `0x${validAfterHex}`,
+      signature
+    ]));
+  }
+
   async getPaymasterStubData(
     id: number,
     params: any[],
@@ -34,7 +81,7 @@ export class PaymasterService {
   ): Promise<any> {
     try {
       if (params.length < 4) {
-        throw new Error('Invalid params');
+        throw new Error('Invalid params: expected at least 4 parameters');
       }
 
       const userOp = params[0];
@@ -45,20 +92,14 @@ export class PaymasterService {
 
       const { paymasterContract, signer } = this.chainRuntimes[chainId];
 
-      // Set validity time window
-      const validUntil = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
-      const validAfter = Math.floor(Date.now() / 1000) - 60; // Valid from 1 minute ago
+      const { validUntil, validAfter } = this.getValidityTimeWindow();
 
-      const paymasterAndDataWithOutSignature = solidityPacked(
-        ['address', 'uint128', 'uint128', 'uint8', 'uint48', 'uint48'],
-        [
-          "0xDE31CDdee69441D6F1D35E3486DA444bbA43573e",
-          BigInt(userOp.paymasterVerificationGasLimit || 0),
-          BigInt(userOp.paymasterPostOpGasLimit || 0),
-          1, // mode in bits 1-7, allowAllBundlers in bit 0
-          BigInt(validUntil),              // 6 bytes timestamp
-          BigInt(validAfter)               // 6 bytes timestamp
-        ]
+      const paymasterAndDataWithOutSignature = this.createPaymasterDataWithoutSignature(
+        paymasterContract.target.toString(),
+        userOp.paymasterVerificationGasLimit || 0,
+        userOp.paymasterPostOpGasLimit || 0,
+        validUntil,
+        validAfter
       );
 
       const userOpHash = this.getUserOpHash(userOp, paymasterAndDataWithOutSignature, Number(chainId));
@@ -66,14 +107,12 @@ export class PaymasterService {
       const signature = await signer.signMessage(
         ethers.getBytes(userOpHash)
       );
-      // Calculate the gas needed for verification and post-processing
+
       const calculateGasLimits = (userOp: any) => {
-        // Base verification gas (fixed cost)
         let verificationGas = 40000;
 
-        // Increase verification gas based on callData size
-        const callDataLength = (userOp.callData.length - 2) / 2; // Remove '0x' and calculate byte count
-        verificationGas += callDataLength * 16; // 16 gas per byte
+        const callDataLength = (userOp.callData.length - 2) / 2;
+        verificationGas += callDataLength * 16;
 
         // If there's initCode, add deployment cost
         if (userOp.initCode && userOp.initCode !== '0x') {
@@ -83,37 +122,23 @@ export class PaymasterService {
         // Post-processing gas (usually smaller than verification gas)
         let postOpGas = 15000 + (callDataLength * 8); // Base cost + 8 gas per byte
 
-        // Ensure postOpGas is at least 40000 as required
         postOpGas = Math.max(postOpGas, 40000);
 
         return {
-          verificationGas: Math.min(verificationGas, 150000), // Set cap
-          postOpGas: Math.min(postOpGas, 50000) // Set cap
+          verificationGas: Math.min(verificationGas, 150000),
+          postOpGas: Math.min(postOpGas, 50000)
         };
       };
 
       const gasLimits = calculateGasLimits(userOp);
 
-      // Mode and allowAllBundlers (using 0x01 for mode 0 and allowAllBundlers true)
-      const modeAndAllowAllBundlers = '0x01';
-
-      // Convert timestamps to 6 bytes
-      const validUntilHex = ethers.toBeHex(validUntil).slice(2).padStart(12, '0');
-      const validAfterHex = ethers.toBeHex(validAfter).slice(2).padStart(12, '0');
-
-      // Build paymasterData
-      const paymasterData = ethers.concat([
-        modeAndAllowAllBundlers,                      // mode and allowAllBundlers (1 byte)
-        `0x${validUntilHex}`,                         // validUntil (6 bytes)
-        `0x${validAfterHex}`,                         // validAfter (6 bytes)
-        signature                                      // signature (65 bytes)
-      ]);
+      const paymasterData = this.createPaymasterData(validUntil, validAfter, signature);
 
       const stubData = {
         "id": id,
         "result": {
-          "paymaster": paymasterContract.target,
-          "paymasterData": ethers.hexlify(paymasterData),
+          "paymaster": paymasterContract.target.toString(),
+          "paymasterData": paymasterData,
           "paymasterPostOpGasLimit": `0x${gasLimits.postOpGas.toString(16)}`,
           "paymasterVerificationGasLimit": `0x${gasLimits.verificationGas.toString(16)}`
         },
@@ -122,12 +147,19 @@ export class PaymasterService {
       return stubData;
     } catch (error: unknown) {
       console.error("Error in getPaymasterStubData:", error);
-      throw new Error(`Failed to generate paymaster stub data: ${error instanceof Error ? error.message : String(error)}`);
+      const errorMessage = error instanceof Error
+        ? `${error.message}\n${error.stack}`
+        : String(error);
+      throw new Error(`Failed to generate paymaster stub data: ${errorMessage}`);
     }
   }
 
   /**
    * Get final paymaster data with signature
+   * @param id - Request ID
+   * @param params - Request parameters containing userOp
+   * @param chainId - Chain ID for the operation
+   * @returns Paymaster data with signature
    */
   async getPaymasterData(
     id: number,
@@ -136,7 +168,7 @@ export class PaymasterService {
   ): Promise<any> {
     try {
       if (params.length < 4) {
-        throw new Error('Invalid params');
+        throw new Error('Invalid params: expected at least 4 parameters');
       }
 
       const userOp = params[0];
@@ -147,56 +179,53 @@ export class PaymasterService {
 
       const { paymasterContract, signer } = this.chainRuntimes[chainId];
 
-      // Set validity window
-      const validUntil = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
-      const validAfter = Math.floor(Date.now() / 1000) - 60; // Valid from 1 minute ago
+      const { validUntil, validAfter } = this.getValidityTimeWindow();
 
-      const paymasterAndDataWithOutSignature = solidityPacked(
-        ['address', 'uint128', 'uint128', 'uint8', 'uint48', 'uint48'],
-        [
-          "0xDE31CDdee69441D6F1D35E3486DA444bbA43573e",
-          BigInt(userOp.paymasterVerificationGasLimit),
-          BigInt(userOp.paymasterPostOpGasLimit),
-          1, // mode in bits 1-7, allowAllBundlers in bit 0
-          BigInt(validUntil),              // 6 bytes timestamp
-          BigInt(validAfter)               // 6 bytes timestamp
-        ]
+      if (userOp.paymasterVerificationGasLimit === undefined) {
+        throw new Error('Missing paymasterVerificationGasLimit in userOp');
+      }
+      if (userOp.paymasterPostOpGasLimit === undefined) {
+        throw new Error('Missing paymasterPostOpGasLimit in userOp');
+      }
+
+      const paymasterAndDataWithOutSignature = this.createPaymasterDataWithoutSignature(
+        paymasterContract.target.toString(),
+        userOp.paymasterVerificationGasLimit,
+        userOp.paymasterPostOpGasLimit,
+        validUntil,
+        validAfter
       );
 
       const userOpHash = this.getUserOpHash(userOp, paymasterAndDataWithOutSignature, Number(chainId));
 
-      // Sign the data
       const signature = await signer.signMessage(
         ethers.getBytes(userOpHash)
       );
 
-      // Convert timestamps to 6 bytes
-      const validUntilHex = ethers.toBeHex(validUntil).slice(2).padStart(12, '0');
-      const validAfterHex = ethers.toBeHex(validAfter).slice(2).padStart(12, '0');
+      const paymasterData = this.createPaymasterData(validUntil, validAfter, signature);
 
-      // Build paymasterData
-      const paymasterData = ethers.concat([
-        `0x01`,                      // mode and allowAllBundlers (1 byte)
-        `0x${validUntilHex}`,                         // validUntil (6 bytes)
-        `0x${validAfterHex}`,                         // validAfter (6 bytes)
-        signature                                      // signature (65 bytes)
-      ]);
-      console.log("### paymaster: \n", paymasterContract.target);
-      console.log("### paymasterData: \n", paymasterData);
-      console.log("### signature: \n", signature);
+      console.log({
+        message: "Generated paymaster data",
+        paymaster: paymasterContract.target.toString(),
+        paymasterData: paymasterData,
+        signature: signature
+      });
 
       const paymasterAndData = {
         "id": id,
         "result": {
-          "paymaster": paymasterContract.target,
-          "paymasterData": ethers.hexlify(paymasterData),
+          "paymaster": paymasterContract.target.toString(),
+          "paymasterData": paymasterData,
         },
         "jsonrpc": "2.0"
       }
       return paymasterAndData;
     } catch (error: unknown) {
       console.error("Error in getPaymasterData:", error);
-      throw new Error(`Failed to generate paymaster data: ${error instanceof Error ? error.message : String(error)}`);
+      const errorMessage = error instanceof Error
+        ? `${error.message}\n${error.stack}`
+        : String(error);
+      throw new Error(`Failed to generate paymaster data: ${errorMessage}`);
     }
   }
 
@@ -204,21 +233,15 @@ export class PaymasterService {
     try {
       const { provider } = this.chainRuntimes[chainId];
 
-      // Get the current gas price
       const feeData = await provider.getFeeData();
 
-      // Calculate gas prices for different speeds
-      let maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || BigInt(1500000000); // 1.5 gwei
+      let maxPriorityFeePerGas = feeData.maxPriorityFeePerGas || BigInt(1500000000);
       maxPriorityFeePerGas = maxPriorityFeePerGas * BigInt(3) / BigInt(2);
 
-      // Slow = base fee + low priority fee
       const slowMaxPriorityFee = maxPriorityFeePerGas * BigInt(80) / BigInt(100);
-      // Standard = base fee + standard priority fee
       const standardMaxPriorityFee = maxPriorityFeePerGas;
-      // Fast = base fee + high priority fee
       const fastMaxPriorityFee = maxPriorityFeePerGas * BigInt(120) / BigInt(100);
 
-      // Base fee
       const baseFee = feeData.gasPrice ? feeData.gasPrice - maxPriorityFeePerGas : BigInt(30000000000);
 
       return {
@@ -257,20 +280,13 @@ export class PaymasterService {
     paymasterAndDataWithOutSignature: string,
     chainId: number
   ): string {
-    // pack accountGasLimits
     const verificationGasLimit = BigInt(userOp.verificationGasLimit || '0');
     const callGasLimit = BigInt(userOp.callGasLimit || '0');
     const accountGasLimits = this.packUint(verificationGasLimit, callGasLimit);
 
-    // pack gasFees
     const maxPriorityFeePerGasBigInt = BigInt(userOp.maxPriorityFeePerGas || '0');
     const maxFeePerGasBigInt = BigInt(userOp.maxFeePerGas || '0');
     const gasFees = this.packUint(maxPriorityFeePerGasBigInt, maxFeePerGasBigInt);
-
-
-    // For debug
-    // console.log("#### userOp encode", JSON.stringify([userOp.sender, userOp.nonce, userOp.initCode || '0x', userOp.callData || '0x', accountGasLimits, userOp.preVerificationGas, gasFees, userOp.paymasterAndData || '0x', userOp.signature || '0x']));
-    // console.log("#### paymasterAndDataWithOutSignature", paymasterAndDataWithOutSignature);
 
     const userOpHash = ethers.keccak256(
       ethers.AbiCoder.defaultAbiCoder().encode(
