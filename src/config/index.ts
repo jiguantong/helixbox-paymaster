@@ -7,4 +7,16 @@ export default {
       rpc: 'https://ethereum-sepolia-rpc.publicnode.com'
     }
   }
-}; 
+} as PaymasterConfig; 
+
+export interface PaymasterConfig {
+  paymasterPrivateKey: string;
+  paymasterAbi: any[];
+  chains: {
+    [key: string]: {
+      paymasterAddress: string;
+      rpc: string;
+      paymasterPrivateKey?: string;
+    }
+  }
+}
