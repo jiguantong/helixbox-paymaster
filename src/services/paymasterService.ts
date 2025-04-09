@@ -25,8 +25,13 @@ export class PaymasterService {
       if (!this.paymasterContract.target || typeof this.paymasterContract.target !== 'string') {
         throw new Error('Invalid paymaster contract address');
       }
+      if (params.length < 4) {
+        throw new Error('Invalid params');
+      }
 
       const userOp = params[0];
+      const chainIdHex = params[2];
+      const chainId = parseInt(chainIdHex, 16);
 
       // Set validity time window
       const validUntil = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
@@ -44,7 +49,7 @@ export class PaymasterService {
         ]
       );
 
-      const userOpHash = this.getUserOpHash(userOp, paymasterAndDataWithOutSignature, 11155111);
+      const userOpHash = this.getUserOpHash(userOp, paymasterAndDataWithOutSignature, chainId);
 
       const signature = await this.signer.signMessage(
         ethers.getBytes(userOpHash)
@@ -117,8 +122,13 @@ export class PaymasterService {
     params: any[]
   ): Promise<any> {
     try {
-      // Extract userOp from params
+      if (params.length < 4) {
+        throw new Error('Invalid params');
+      }
+
       const userOp = params[0];
+      const chainIdHex = params[2];
+      const chainId = parseInt(chainIdHex, 16);
 
       // Set validity window
       const validUntil = Math.floor(Date.now() / 1000) + 3600; // Valid for 1 hour
@@ -135,11 +145,8 @@ export class PaymasterService {
           BigInt(validAfter)               // 6 bytes timestamp
         ]
       );
-      console.log('### paymasterAndDataWithOutSignature: \n', paymasterAndDataWithOutSignature);
 
-      // Create hash to sign
-      const userOpHash = this.getUserOpHash(userOp, paymasterAndDataWithOutSignature, 11155111);
-      console.log("userOpHash", userOpHash);
+      const userOpHash = this.getUserOpHash(userOp, paymasterAndDataWithOutSignature, chainId);
 
       // Sign the data
       const signature = await this.signer.signMessage(
