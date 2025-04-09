@@ -3,10 +3,8 @@ import { PaymasterService } from '../../services/paymasterService.js'
 import config from '../../config/index.js'
 
 const paymaster: FastifyPluginAsync = async (fastify, opts): Promise<void> => {
-  // Initialize PaymasterService
   const paymasterService = new PaymasterService(config)
 
-  // Health check endpoint
   fastify.post('/', { schema: pimlicoSchema }, async function (request, reply) {
     const { id, method, params } = request.body as {
       id: number,
